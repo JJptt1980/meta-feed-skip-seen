@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meta 動態：快速下拉、跳過看過的
 // @namespace    jjptt.phone-cleanup
-// @version      1.1.0
-// @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
+// @version      1.2.0
+// @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：藏掉廣告（贊助貼文）；記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
 // @match        https://m.facebook.com/*
 // @match        https://www.facebook.com/*
 // @match        https://www.instagram.com/*
@@ -44,8 +44,8 @@
   }
   // 只藏「這次打開頁面之前」看過的，和按下拉時一起算進來的；邊滑邊看的不會當場消失
   const hideSet = new Set(seenList);
-  let paused = false;
-  try { paused = localStorage.getItem('jjSeenPaused') === '1'; } catch (e) {}
+  let paused = false, showAds = false;
+  try { paused = localStorage.getItem('jjSeenPaused') === '1'; showAds = localStorage.getItem('jjShowAds') === '1'; } catch (e) {}
 
   if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand('清除看過的記錄', () => {
@@ -56,6 +56,10 @@
     });
     GM_registerMenuCommand(paused ? '恢復跳過看過的' : '暫停跳過看過的', () => {
       try { localStorage.setItem('jjSeenPaused', paused ? '0' : '1'); } catch (e) {}
+      location.reload();
+    });
+    GM_registerMenuCommand(showAds ? '隱藏廣告' : '顯示廣告', () => {
+      try { localStorage.setItem('jjShowAds', showAds ? '0' : '1'); } catch (e) {}
       location.reload();
     });
   }
@@ -100,12 +104,43 @@
     return 'fb:' + lines.slice(0, 3).join('|').slice(0, 120);
   }
 
+  // ---------- 廣告（贊助貼文）----------
+  const AD_RE = /^(贊助|赞助|Sponsored|廣告)$/;
+  const FB_TIME_RE = /(秒|分鐘|小時|天|週|周|個月|月|年|昨天|剛剛)|^\d+\s*[smhdwy]$/;
+  function isAd(el) {
+    if (SITE === 'fb' && FB_DESKTOP) {
+      // 電腦版 FB 把「贊助」拆散成圖形；一般貼文作者下面有時間（aria-labelledby 指向「3小時」這類字），廣告沒有
+      // 作者和作者下面那行（含圖形）都出來了才判斷，避免時間還沒載入就誤判
+      if (!el.querySelector('h2 a, h3 a, h4 a, strong a, h2 span, h3 span') || !el.querySelector('use')) return false;
+      for (const x of el.querySelectorAll('[aria-labelledby]')) {
+        const t = document.getElementById((x.getAttribute('aria-labelledby') || '').split(' ')[0]);
+        if (t && FB_TIME_RE.test(t.textContent)) return false;
+      }
+      return true;
+    }
+    if (SITE === 'fb') return /贊助|Sponsored/.test((el.innerText || '').slice(0, 150));
+    // IG、Threads：貼文開頭幾行有一行就是「贊助」
+    return (el.innerText || '').split('\n').slice(0, 8).some(l => AD_RE.test(l.trim()));
+  }
+  let adCount = 0;
+  function hideAds() {
+    if (showAds || !isFeed()) return 0;
+    let n = 0;
+    for (const el of posts()) {
+      if (el.hasAttribute('data-jj-ad') || el.offsetHeight === 0 && el.style.display === 'none') continue;
+      if (!(el.innerText || '').trim()) continue; // 還沒載入內容
+      if (isAd(el)) { el.style.display = 'none'; el.setAttribute('data-jj-ad', '1'); n++; }
+    }
+    adCount += n;
+    return n;
+  }
+
   // ---------- 一出現就藏掉看過的（只在首頁動態）----------
   function hideSeen() {
     if (paused || !isFeed()) return 0;
     let n = 0;
     for (const el of posts()) {
-      if (el.hasAttribute('data-jj-seen-hidden')) continue;
+      if (el.hasAttribute('data-jj-seen-hidden') || el.hasAttribute('data-jj-ad')) continue;
       const id = postId(el);
       if (id && hideSet.has(id)) {
         el.style.display = 'none'; el.setAttribute('data-jj-seen-hidden', '1'); n++;
@@ -133,11 +168,18 @@
   }
 
   // 打開頁面時藏掉的篇數，累計後提示一次
-  let loadHidden = 0, loadToastTimer = 0;
+  let loadHidden = 0, loadAds = 0, loadToastTimer = 0;
   function tick() {
+    const a = hideAds();
     watch();
     const n = hideSeen();
-    if (n) { loadHidden += n; clearTimeout(loadToastTimer); loadToastTimer = setTimeout(() => { toast('跳過 ' + loadHidden + ' 篇看過的'); loadHidden = 0; }, 800); }
+    if (n || a) {
+      loadHidden += n; loadAds += a; clearTimeout(loadToastTimer);
+      loadToastTimer = setTimeout(() => {
+        const msg = [loadHidden ? '跳過 ' + loadHidden + ' 篇看過的' : '', loadAds ? '藏 ' + loadAds + ' 則廣告' : ''].filter(Boolean).join('、');
+        toast(msg); loadHidden = 0; loadAds = 0;
+      }, 800);
+    }
   }
   const mo = new MutationObserver(() => { if (!mo.pending) { mo.pending = true; requestAnimationFrame(() => { mo.pending = false; tick(); }); } });
   function start() { mo.observe(document.documentElement, { childList: true, subtree: true }); tick(); }
