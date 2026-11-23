@@ -1,7 +1,7 @@
 # STATUS
 
 ## 目前進度
-- 2026-11-24 1.1.0：加電腦版（Mac Firefox）。@match 加 www.facebook.com，電腦版 FB 貼文用 [aria-posinset]，識別用作者（h2/h3/strong a）＋內文（data-ad-preview=message 等）前 80 字，抓不到才用內文前三行；Threads、IG 電腦版結構跟手機一樣（用使用者 Chrome 查過）。開頁時藏掉看過的會提示「跳過 N 篇看過的」。
+- 2026-11-24 1.1.0：加電腦版（Mac Firefox）。@match 加 www.facebook.com，電腦版 FB 貼文用 [aria-posinset]，識別用作者（h2/h3/strong a）＋內文（data-ad-preview=message 等）前 80 字，抓不到才用內文前三行；Threads、IG 電腦版結構跟手機一樣（用使用者 Chrome 查過）。開頁時藏掉看過的會提示「跳過 N 篇看過的」。2026-11-24 Mac Firefox 160 實測 FB：第二次開頁跳出「跳過 1 篇看過的」。Mac 的 IG、Threads 還沒測：IG 登入只能用存在 vivo 手機上的通行密鑰，Mac 叫不出手機掃碼視窗（陸版手機可能缺 Google 服務），也沒有其他驗證方式。
 - 2026-11-24 1.0.1：從「手機整理」專案搬出來公開（原本 1.0.0 在私人 repo 的 tools/meta-feed.user.js），加上 @updateURL 讓 Violentmonkey 自動更新。功能：記住看過的貼文（一半以上在畫面上超過 1 秒）、首頁動態自動藏掉；在頂端下拉用 touchmove preventDefault 擋掉 Firefox 整頁重新載入，改成藏掉看過的、捲回頂端（Threads 先點「查看另外 N 則串文」），1.5 秒內沒有新貼文才 location.reload()。1.0.0 已在 vivo X200 Pro 的 Firefox 桌面捷徑實測三站：放手約 0.3 秒換成沒看過的貼文；重開頁面看過的會藏。
 
 ## 已定案的決定
