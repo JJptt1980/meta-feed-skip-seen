@@ -1,0 +1,212 @@
+// ==UserScript==
+// @name         Meta 動態：快速下拉、跳過看過的
+// @namespace    jjptt.phone-cleanup
+// @version      1.0.1
+// @description  Facebook（m.facebook.com）、Instagram、Threads 首頁動態：記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
+// @match        https://m.facebook.com/*
+// @match        https://www.instagram.com/*
+// @match        https://www.threads.com/*
+// @match        https://www.threads.net/*
+// @run-at       document-start
+// @homepageURL  https://github.com/JJptt1980/meta-feed-skip-seen
+// @updateURL    https://raw.githubusercontent.com/JJptt1980/meta-feed-skip-seen/main/meta-feed.user.js
+// @downloadURL  https://raw.githubusercontent.com/JJptt1980/meta-feed-skip-seen/main/meta-feed.user.js
+// @license      MIT
+// @grant        GM_registerMenuCommand
+// ==/UserScript==
+
+/*
+看過的定義：貼文有一半以上在畫面上超過 1 秒。
+看過的記錄存在各網站自己的 localStorage（jjSeen），最多 4000 筆，只在這支手機的 Firefox 裡。
+只在首頁動態作用；個人頁、單篇貼文頁不藏。
+*/
+(function () {
+  'use strict';
+  const host = location.hostname;
+  const SITE = host.includes('facebook') ? 'fb' : host.includes('instagram') ? 'ig' : 'th';
+  const KEY = 'jjSeen';
+  const MAX = 4000;
+  const SEEN_MS = 1000;
+
+  // ---------- 看過的記錄 ----------
+  let seenList = [];
+  try { seenList = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { seenList = []; }
+  const seen = new Set(seenList);
+  let saveTimer = 0;
+  function markSeen(id) {
+    if (!id || seen.has(id)) return;
+    seen.add(id); seenList.push(id);
+    if (seenList.length > MAX) { const drop = seenList.splice(0, seenList.length - MAX); drop.forEach(d => seen.delete(d)); }
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(seenList)); } catch (e) {} }, 500);
+  }
+  // 只藏「這次打開頁面之前」看過的，和按下拉時一起算進來的；邊滑邊看的不會當場消失
+  const hideSet = new Set(seenList);
+  let paused = false;
+  try { paused = localStorage.getItem('jjSeenPaused') === '1'; } catch (e) {}
+
+  if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('清除看過的記錄', () => {
+      seen.clear(); seenList = []; hideSet.clear();
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      document.querySelectorAll('[data-jj-seen-hidden]').forEach(el => { el.style.display = ''; el.removeAttribute('data-jj-seen-hidden'); });
+      toast('已清除看過的記錄');
+    });
+    GM_registerMenuCommand(paused ? '恢復跳過看過的' : '暫停跳過看過的', () => {
+      try { localStorage.setItem('jjSeenPaused', paused ? '0' : '1'); } catch (e) {}
+      location.reload();
+    });
+  }
+
+  // ---------- 各站：找貼文、取識別 ----------
+  function isFeed() {
+    const p = location.pathname;
+    if (SITE === 'fb') return p === '/' || p === '/home.php';
+    return p === '/';
+  }
+  function posts() {
+    if (SITE === 'th') return [...document.querySelectorAll('[data-pagelet^="threads_feed_"]')];
+    if (SITE === 'ig') return [...document.querySelectorAll('article')];
+    return [...document.querySelectorAll('[data-tracking-duration-id]')];
+  }
+  const TIME_RE = /^(\d+\s*(秒|分鐘|小時|天|週|周|個月|年)|昨天|剛剛|\d+月\d+日|\d{4}年)/;
+  function postId(el) {
+    if (SITE === 'th') {
+      const a = el.querySelector('a[href*="/post/"]');
+      const m = a && a.getAttribute('href').match(/\/post\/([^/?#]+)/);
+      return m ? 'th:' + m[1] : null;
+    }
+    if (SITE === 'ig') {
+      for (const a of el.querySelectorAll('a[href]')) {
+        const m = a.getAttribute('href').match(/\/(?:p|reel)\/([^/?#]+)/);
+        if (m) return 'ig:' + m[1];
+      }
+      return null;
+    }
+    // FB 沒有固定的貼文代碼：用作者＋內文開頭（去掉時間、按讚數這類會變的字）
+    if (el.offsetHeight < 60) return null;
+    const lines = (el.innerText || '').split('\n').map(s => s.trim())
+      .filter(s => s.length > 1 && !TIME_RE.test(s) && !/^[\d,.\s萬千]+$/.test(s) && !/[-]|[\uDB80-\uDBFF]/.test(s));
+    if (lines.length < 2) return null;
+    return 'fb:' + lines.slice(0, 3).join('|').slice(0, 120);
+  }
+
+  // ---------- 一出現就藏掉看過的（只在首頁動態）----------
+  function hideSeen() {
+    if (paused || !isFeed()) return 0;
+    let n = 0;
+    for (const el of posts()) {
+      if (el.hasAttribute('data-jj-seen-hidden')) continue;
+      const id = postId(el);
+      if (id && hideSet.has(id)) {
+        el.style.display = 'none'; el.setAttribute('data-jj-seen-hidden', '1'); n++;
+      }
+    }
+    return n;
+  }
+
+  // ---------- 記錄看過的：一半以上在畫面上超過 1 秒 ----------
+  const timers = new WeakMap();
+  const io = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      const el = e.target;
+      if (e.isIntersecting && e.intersectionRatio >= 0.5) {
+        if (!timers.has(el)) timers.set(el, setTimeout(() => { markSeen(postId(el)); timers.delete(el); }, SEEN_MS));
+      } else if (timers.has(el)) { clearTimeout(timers.get(el)); timers.delete(el); }
+    }
+  }, { threshold: [0, 0.5] });
+  const watched = new WeakSet();
+  function watch() {
+    for (const el of posts()) {
+      if (watched.has(el)) continue;
+      watched.add(el); io.observe(el);
+    }
+  }
+
+  function tick() { watch(); hideSeen(); }
+  const mo = new MutationObserver(() => { if (!mo.pending) { mo.pending = true; requestAnimationFrame(() => { mo.pending = false; tick(); }); } });
+  function start() { mo.observe(document.documentElement, { childList: true, subtree: true }); tick(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+
+  // ---------- 提示 ----------
+  let toastEl;
+  function toast(msg) {
+    if (!document.body) return;
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.style.cssText = 'position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,.8);color:#fff;font:14px/1.4 sans-serif;padding:6px 14px;border-radius:16px;pointer-events:none;transition:opacity .3s';
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg; toastEl.style.opacity = '1';
+    clearTimeout(toastEl._t); toastEl._t = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
+  }
+
+  // ---------- 下拉：不重新載入，藏掉看過的 ----------
+  const PULL = 70;
+  let y0 = null, dy = 0, ind;
+  function indicator() {
+    if (!ind) {
+      ind = document.createElement('div');
+      ind.style.cssText = 'position:fixed;left:50%;top:0;width:40px;height:40px;margin-left:-20px;border-radius:50%;background:#fff;color:#333;box-shadow:0 2px 6px rgba(0,0,0,.35);z-index:2147483647;display:flex;align-items:center;justify-content:center;font:22px/1 sans-serif;pointer-events:none;opacity:0';
+      document.body.appendChild(ind);
+    }
+    return ind;
+  }
+  function atTop() { return (document.scrollingElement || document.documentElement).scrollTop <= 0; }
+  function blocked(t) {
+    // 打字、看大圖／限時動態、在有自己捲軸的面板裡，都不接手
+    if (!t || !t.closest) return false;
+    if (t.closest('input,textarea,[contenteditable=""],[contenteditable="true"],[role=dialog],video')) return true;
+    for (let el = t; el && el !== document.body; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight + 4 && el.scrollTop > 0 && /(auto|scroll)/.test(getComputedStyle(el).overflowY)) return true;
+    }
+    return false;
+  }
+  addEventListener('touchstart', e => {
+    y0 = (e.touches.length === 1 && isFeed() && atTop() && !blocked(e.target)) ? e.touches[0].clientY : null; dy = 0;
+  }, { passive: true, capture: true });
+  addEventListener('touchmove', e => {
+    if (y0 === null) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy <= 0 || !atTop()) { if (dy < 0) y0 = null; if (ind) ind.style.opacity = '0'; return; }
+    e.preventDefault(); // 擋掉 Firefox 自己的整頁重新載入
+    const d = Math.min(dy, PULL * 1.6);
+    const i = indicator();
+    i.style.opacity = String(Math.min(1, d / PULL));
+    i.style.transform = 'translateY(' + (d * 0.8) + 'px)';
+    i.textContent = dy >= PULL ? '↻' : '↓';
+  }, { passive: false, capture: true });
+  addEventListener('touchend', () => {
+    if (y0 === null) return;
+    const go = dy >= PULL; y0 = null;
+    if (ind) { ind.style.opacity = '0'; ind.style.transform = ''; }
+    if (go) refresh();
+  }, { passive: true, capture: true });
+
+  function visiblePosts() {
+    const h = innerHeight;
+    return posts().filter(el => { if (el.style.display === 'none') return false; const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < h && r.height > 0; });
+  }
+  function refresh() {
+    // Threads 已經抓好新串文時，直接點「查看另外 N 則串文」
+    if (SITE === 'th') {
+      const s = [...document.querySelectorAll('span')].find(x => /^查看另外.*串文$/.test(x.textContent.trim()));
+      const b = s && s.closest('[role=button]');
+      if (b) { b.click(); }
+    }
+    // 畫面上這幾篇算看過
+    visiblePosts().forEach(el => markSeen(postId(el)));
+    seen.forEach(id => hideSet.add(id));
+    const n = hideSeen();
+    (document.scrollingElement || document.documentElement).scrollTop = 0;
+    toast(n ? '跳過 ' + n + ' 篇看過的' : '更新中…');
+    // 1.5 秒內沒有還沒看過的貼文出現，才整頁重新載入
+    const t0 = Date.now();
+    (function check() {
+      const fresh = visiblePosts().some(el => { const id = postId(el); return id && !seen.has(id); });
+      if (fresh) return;
+      if (Date.now() - t0 > 1500) { location.reload(); return; }
+      setTimeout(check, 150);
+    })();
+  }
+})();
