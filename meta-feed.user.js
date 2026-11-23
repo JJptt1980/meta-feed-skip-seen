@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Meta 動態：快速下拉、跳過看過的
 // @namespace    jjptt.phone-cleanup
-// @version      1.0.1
-// @description  Facebook（m.facebook.com）、Instagram、Threads 首頁動態：記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
+// @version      1.1.0
+// @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
 // @match        https://m.facebook.com/*
+// @match        https://www.facebook.com/*
 // @match        https://www.instagram.com/*
 // @match        https://www.threads.com/*
 // @match        https://www.threads.net/*
@@ -24,6 +25,7 @@
   'use strict';
   const host = location.hostname;
   const SITE = host.includes('facebook') ? 'fb' : host.includes('instagram') ? 'ig' : 'th';
+  const FB_DESKTOP = host === 'www.facebook.com';
   const KEY = 'jjSeen';
   const MAX = 4000;
   const SEEN_MS = 1000;
@@ -67,6 +69,7 @@
   function posts() {
     if (SITE === 'th') return [...document.querySelectorAll('[data-pagelet^="threads_feed_"]')];
     if (SITE === 'ig') return [...document.querySelectorAll('article')];
+    if (FB_DESKTOP) return [...document.querySelectorAll('[aria-posinset]')];
     return [...document.querySelectorAll('[data-tracking-duration-id]')];
   }
   const TIME_RE = /^(\d+\s*(秒|分鐘|小時|天|週|周|個月|年)|昨天|剛剛|\d+月\d+日|\d{4}年)/;
@@ -84,6 +87,12 @@
       return null;
     }
     // FB 沒有固定的貼文代碼：用作者＋內文開頭（去掉時間、按讚數這類會變的字）
+    if (FB_DESKTOP) {
+      const au = el.querySelector('h2 a, h3 a, h4 a, strong a, h2 span, h3 span');
+      const msg = el.querySelector('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-ad-rendering-role="story_message"]');
+      const a = au ? au.textContent.trim() : '', m = msg ? msg.textContent.trim().slice(0, 80) : '';
+      if (a && m) return 'fb:' + a + '|' + m;
+    }
     if (el.offsetHeight < 60) return null;
     const lines = (el.innerText || '').split('\n').map(s => s.trim())
       .filter(s => s.length > 1 && !TIME_RE.test(s) && !/^[\d,.\s萬千]+$/.test(s) && !/[-]|[\uDB80-\uDBFF]/.test(s));
@@ -123,7 +132,13 @@
     }
   }
 
-  function tick() { watch(); hideSeen(); }
+  // 打開頁面時藏掉的篇數，累計後提示一次
+  let loadHidden = 0, loadToastTimer = 0;
+  function tick() {
+    watch();
+    const n = hideSeen();
+    if (n) { loadHidden += n; clearTimeout(loadToastTimer); loadToastTimer = setTimeout(() => { toast('跳過 ' + loadHidden + ' 篇看過的'); loadHidden = 0; }, 800); }
+  }
   const mo = new MutationObserver(() => { if (!mo.pending) { mo.pending = true; requestAnimationFrame(() => { mo.pending = false; tick(); }); } });
   function start() { mo.observe(document.documentElement, { childList: true, subtree: true }); tick(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
