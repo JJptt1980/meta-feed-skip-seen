@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Meta 動態：快速下拉、跳過看過的
 // @namespace    jjptt.phone-cleanup
-// @version      1.4.0
+// @version      1.5.0
 // @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：藏掉廣告（贊助貼文）；記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
 // @match        https://m.facebook.com/*
 // @match        https://www.facebook.com/*
@@ -199,34 +199,40 @@
   }
 
   // ---------- 返回防誤觸（手機） ----------
-  // 邊緣往內滑返回：捷徑（PWA）開的頁面第一頁前面有個 Firefox 自己的空白頁，退到那裡看起來像當掉；
-  // 一般分頁沒有上一頁時，Firefox 會直接把頁面關掉。使用者要「怎麼滑都不會跳出去，要離開就從底部上滑」。
-  // 做法：在動態首頁碰過畫面後，在這一筆（墊底）上面多墊一筆空白狀態的上一頁。回到墊底那筆時：
-  //   本來停在首頁 → 不讓網站知道，再墊一筆、停在原地並提示（首頁就是最外層，不再往回）
-  //   從發文框、單篇貼文等回來 → 讓網站自己處理，再墊回去
+  // 使用者要：動態首頁往下滑過時，往內滑第一下先回到最上面；在最上面再滑一下就離開。
+  // 做法：在首頁往下捲（且碰過畫面）時，在這一筆（墊底）上面多墊一筆空白狀態的上一頁；捲回最上面時用腳本退回墊底那筆，
+  // 讓 Firefox 自己處理下一次返回（離開）。回到墊底那筆時：
+  //   本來停在首頁、還沒在最上面 → 不讓網站知道，再墊一筆並捲回最上面
+  //   從發文框、單篇貼文等回來 → 讓網站自己處理（FB 關發文框要靠它）
   // 不改網站自己的 state（FB 靠它還原畫面，動了會整片變灰），用 Navigation API 的 key 認墊底那筆。
   // Firefox 使用者按返回會跳過沒碰過的那幾筆，所以要等碰過畫面才墊；腳本自己的 history.back() 不受影響。
   if (matchMedia('(pointer: coarse)').matches && window.navigation) {
-    let baseKey = null, lastFeed = false;
-    const arm = () => {
-      if (baseKey || !isFeed() || document.readyState !== 'complete' || !navigation.currentEntry) return;
-      baseKey = navigation.currentEntry.key;
-      history.pushState(null, '', location.href);
+    let baseKey = null, lastFeed = false, touched = false, selfBack = false;
+    const cur = () => navigation.currentEntry && navigation.currentEntry.key;
+    const atTop = () => scrollY <= 50 && (document.scrollingElement || document.documentElement).scrollTop <= 50;
+    const sync = () => {
+      lastFeed = isFeed();
+      if (!touched || selfBack || !lastFeed || document.readyState !== 'complete' || !navigation.currentEntry) return;
+      if (!baseKey) baseKey = cur();
+      const onBase = cur() === baseKey;
+      const guard = !onBase && navigation.currentEntry.index > 0 &&
+        navigation.entries()[navigation.currentEntry.index - 1].key === baseKey;
+      if (onBase && !atTop()) history.pushState(null, '', location.href);
+      else if (guard && atTop()) { selfBack = true; history.back(); setTimeout(() => { selfBack = false; }, 1500); }
     };
-    setInterval(() => { lastFeed = isFeed(); }, 300);
+    setInterval(sync, 300);
     addEventListener('popstate', e => {
-      if (!baseKey || !navigation.currentEntry || navigation.currentEntry.key !== baseKey) return;
-      if (!lastFeed) {
-        // 從發文框、單篇貼文等回到首頁：照樣讓網站處理（FB 關發文框要靠它），再把墊的那筆補回去
-        setTimeout(() => history.pushState(null, '', location.href), 0);
-        return;
-      }
-      // 本來就停在首頁、又滑返回：不讓網站知道（FB 收到會整片變灰），停在原地
+      if (!baseKey || cur() !== baseKey) return;
+      if (selfBack) { selfBack = false; e.stopImmediatePropagation(); return; }
+      if (!lastFeed) return; // 從發文框、單篇貼文等回到首頁：讓網站處理
+      // 本來停在首頁、還沒在最上面又滑返回：不讓網站知道（FB 收到會整片變灰），捲回最上面
       e.stopImmediatePropagation();
       history.pushState(null, '', location.href);
-      toast('已是第一頁，要離開請從底部上滑');
+      // Firefox 返回時會自己還原捲動位置，晚一點再捲、多捲幾次才蓋得過
+      for (const t of [0, 150, 400]) setTimeout(() => scrollTo(0, 0), t);
+      toast('已回到最上面，再滑一下就離開');
     }, true);
-    addEventListener('touchend', () => { if (!baseKey) setTimeout(arm, 300); }, { capture: true, passive: true });
+    addEventListener('touchend', () => { touched = true; }, { capture: true, passive: true });
   }
 
   // ---------- 下拉：不重新載入，藏掉看過的 ----------
