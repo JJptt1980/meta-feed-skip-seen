@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Meta 動態：快速下拉、跳過看過的
 // @namespace    jjptt.phone-cleanup
-// @version      1.2.0
+// @version      1.3.0
 // @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：藏掉廣告（贊助貼文）；記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
 // @match        https://m.facebook.com/*
 // @match        https://www.facebook.com/*
@@ -196,6 +196,39 @@
     }
     toastEl.textContent = msg; toastEl.style.opacity = '1';
     clearTimeout(toastEl._t); toastEl._t = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
+  }
+
+  // ---------- 返回防誤觸（手機） ----------
+  // 桌面捷徑（PWA）開的頁面，第一頁前面還有一個 Firefox 自己的空白頁：在動態首頁往內滑返回，
+  // 會退到那個空白頁，看起來像當掉。一般分頁沒有上一頁時，滑一下 Firefox 就直接把頁面關掉。
+  // 做法：在動態首頁多墊一筆上一頁（等使用者碰過畫面才墊），滑返回時畫面不動、只跳提示。
+  //   捷徑：永遠擋住（要離開就從底部往上滑回主畫面）
+  //   一般分頁：2 秒內再滑一次才離開
+  if (matchMedia('(pointer: coarse)').matches) {
+    const pwa = !matchMedia('(display-mode: browser)').matches;   // 捷徑開的：Threads 是 standalone、FB 是 minimal-ui
+    let armed = false, rearm = 0;
+    const isBase = st => !!(st && typeof st === 'object' && st.jjBase);
+    // 網頁的 state 先轉成文字再複製（腳本和網頁不同沙盒，直接混用物件會出錯）
+    const copy = st => { try { return JSON.parse(JSON.stringify(st ?? null)); } catch (e) { return null; } };
+    const push = () => { const st = history.state; history.pushState(isBase(st) ? JSON.parse(st.jjOrig || 'null') : copy(st), '', location.href); };
+    const arm = () => {
+      if (armed || !isFeed() || document.readyState !== 'complete') return;
+      if (!pwa && history.length > 1) { armed = true; return; }   // 一般分頁前面有真的上一頁，不用墊
+      armed = true;
+      history.replaceState({ jjBase: 1, jjOrig: JSON.stringify(copy(history.state)) }, '', location.href);
+      push();
+    };
+    // 比網站自己的程式先收到：落在墊的那筆時不讓網站知道，畫面不動
+    addEventListener('popstate', e => {
+      if (!isBase(e.state)) return;
+      e.stopImmediatePropagation();
+      clearTimeout(rearm);
+      if (pwa) { push(); toast('已是第一頁，要離開請從底部上滑'); return; }
+      toast('再滑一次返回才會離開');
+      rearm = setTimeout(() => { if (isBase(history.state)) push(); }, 2000);
+    }, true);
+    // Firefox 返回時會跳過使用者沒碰過的那幾筆，所以等使用者在首頁滑過／點過才墊
+    addEventListener('touchend', () => { if (!armed) setTimeout(arm, 300); }, { capture: true, passive: true });
   }
 
   // ---------- 下拉：不重新載入，藏掉看過的 ----------
