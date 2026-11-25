@@ -12,7 +12,7 @@
 // @homepageURL  https://github.com/JJptt1980/meta-feed-skip-seen
 // @updateURL    https://raw.githubusercontent.com/JJptt1980/meta-feed-skip-seen/main/meta-feed.user.js
 // @downloadURL  https://raw.githubusercontent.com/JJptt1980/meta-feed-skip-seen/main/meta-feed.user.js
-// @license      MIT
+// @license      PolyForm-Noncommercial-1.0.0
 // @grant        GM_registerMenuCommand
 // ==/UserScript==
 
