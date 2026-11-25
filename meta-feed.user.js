@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Meta 動態：快速下拉、跳過看過的
 // @namespace    jjptt.phone-cleanup
-// @version      1.5.0
+// @version      1.6.0
 // @description  Facebook、Instagram、Threads 首頁動態（手機和電腦的 Firefox 都能用）：藏掉廣告（贊助貼文）；記住看過的貼文，下次出現自動藏起來；在最上面下拉時不重新載入整頁，直接藏掉看過的、露出後面還沒看的（Threads 有「查看另外 N 則串文」就先點它），比 Firefox 整頁重新載入快很多。
 // @match        https://m.facebook.com/*
 // @match        https://www.facebook.com/*
@@ -122,13 +122,17 @@
     // IG、Threads：貼文開頭幾行有一行就是「贊助」
     return (el.innerText || '').split('\n').slice(0, 8).some(l => AD_RE.test(l.trim()));
   }
+  // 加速：innerText 會逼瀏覽器重排版，很慢。每篇記住上次檢查時的字數（textContent 不用排版），字數沒變就不再檢查
+  const adLen = new WeakMap(), seenLen = new WeakMap();
   let adCount = 0;
   function hideAds() {
     if (showAds || !isFeed()) return 0;
     let n = 0;
     for (const el of posts()) {
-      if (el.hasAttribute('data-jj-ad') || el.offsetHeight === 0 && el.style.display === 'none') continue;
-      if (!(el.innerText || '').trim()) continue; // 還沒載入內容
+      if (el.style.display === 'none' || el.hasAttribute('data-jj-ad')) continue;
+      const L = el.textContent.length;
+      if (L < 2 || adLen.get(el) === L) continue; // 還沒載入內容，或上次檢查後沒變
+      adLen.set(el, L);
       if (isAd(el)) { el.style.display = 'none'; el.setAttribute('data-jj-ad', '1'); n++; }
     }
     adCount += n;
@@ -136,12 +140,15 @@
   }
 
   // ---------- 一出現就藏掉看過的（只在首頁動態）----------
-  function hideSeen() {
+  function hideSeen(force) {
     if (paused || !isFeed()) return 0;
     let n = 0;
     for (const el of posts()) {
       if (el.hasAttribute('data-jj-seen-hidden') || el.hasAttribute('data-jj-ad')) continue;
+      const L = el.textContent.length;
+      if (!force && seenLen.get(el) === L) continue;
       const id = postId(el);
+      if (id) seenLen.set(el, L); // 算不出識別（還沒載完）就下次再算
       if (id && hideSet.has(id)) {
         el.style.display = 'none'; el.setAttribute('data-jj-seen-hidden', '1'); n++;
       }
@@ -181,21 +188,39 @@
       }, 800);
     }
   }
-  const mo = new MutationObserver(() => { if (!mo.pending) { mo.pending = true; requestAnimationFrame(() => { mo.pending = false; tick(); }); } });
+  // 網頁一直在變（載入、捲動），最多每 200ms 檢查一次，不要每一格畫面都檢查
+  const mo = new MutationObserver(() => { if (!mo.pending) { mo.pending = true; setTimeout(() => { mo.pending = false; tick(); }, 200); } });
   function start() { mo.observe(document.documentElement, { childList: true, subtree: true }); tick(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
-  // ---------- 提示 ----------
+  // ---------- 提示（放在下方，不擋上面的發文框和頁籤）----------
   let toastEl;
   function toast(msg) {
     if (!document.body) return;
     if (!toastEl) {
       toastEl = document.createElement('div');
-      toastEl.style.cssText = 'position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,.8);color:#fff;font:14px/1.4 sans-serif;padding:6px 14px;border-radius:16px;pointer-events:none;transition:opacity .3s';
+      toastEl.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);white-space:nowrap;z-index:2147483647;background:rgba(0,0,0,.8);color:#fff;font:14px/1.4 sans-serif;padding:6px 14px;border-radius:16px;pointer-events:none;transition:opacity .3s';
       document.body.appendChild(toastEl);
     }
     toastEl.textContent = msg; toastEl.style.opacity = '1';
     clearTimeout(toastEl._t); toastEl._t = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
+  }
+
+  // ---------- FB 手機版：藏掉「開啟應用程式」橫幅 ----------
+  // 動態底下 FB 硬塞的大藍色按鈕。找文字剛好是這幾個字的文字節點，往上找到固定在畫面上的那層整塊藏掉。
+  if (host === 'm.facebook.com') {
+    const XP = ['開啟應用程式', '打开应用', '開啟 App', 'Open app', 'Open App'].map(t => `normalize-space(.)="${t}"`).join(' or ');
+    setInterval(() => {
+      if (!document.body) return;
+      const r = document.evaluate(`//body//text()[${XP}]`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < r.snapshotLength; i++) {
+        const el = r.snapshotItem(i).parentElement;
+        let n = el;
+        while (n && n !== document.body && !/fixed|sticky/.test(getComputedStyle(n).position)) n = n.parentElement;
+        const box = n && n !== document.body ? n : el.closest('[role="button"],a,button') || el;
+        if (box.style.display !== 'none') box.style.setProperty('display', 'none', 'important');
+      }
+    }, 1000);
   }
 
   // ---------- 返回防誤觸（手機） ----------
@@ -291,7 +316,7 @@
     // 畫面上這幾篇算看過
     visiblePosts().forEach(el => markSeen(postId(el)));
     seen.forEach(id => hideSet.add(id));
-    const n = hideSeen();
+    const n = hideSeen(true);
     (document.scrollingElement || document.documentElement).scrollTop = 0;
     toast(n ? '跳過 ' + n + ' 篇看過的' : '更新中…');
     // 1.5 秒內沒有還沒看過的貼文出現，才整頁重新載入
