@@ -14,10 +14,11 @@
 - 只做在手機 Firefox＋Violentmonkey；字型、藏開 App 按鈕由 JJptt1980/JJSans-download 的腳本負責，這裡不重複。
 - 識別：Threads 用 /post/ 代碼、IG 用 /p/ 或 /reel/ 代碼、FB 用內文前三行（去掉時間、純數字、私用區圖示字元）。
 - 只藏「這次打開頁面之前看過的」和「按下拉時一起算進來的」，邊滑邊看的不會當場消失。
+- 分割畫面（2026-11-27）：Firefox 不能自己跟自己並排，捷徑也會開回同一個視窗。X200 Pro 另裝 Firefox Beta（Play 商店）＋Violentmonkey＋本腳本（raw GitHub 網址，會自動更新），專門看 Threads 等，跟主 Firefox（酷澎）並排。Firefox Beta 已關閉技術資料與每日使用回報。
 - @namespace 保留 jjptt.phone-cleanup，避免手機上的 Violentmonkey 當成另一支腳本而重複。
 
 ## 下一步
-- 無，等使用者回報。
+- 使用者在 Firefox Beta 登入 Threads（IG/FB 要用再登入），試分割畫面。
 
 ## 已知問題
 - 捷徑裡的動態首頁無法用返回離開（設計如此），要從底部上滑回主畫面。
